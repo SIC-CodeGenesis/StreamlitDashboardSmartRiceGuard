@@ -1,20 +1,9 @@
 import streamlit as st
-import asyncio
-import websockets
-import base64
-from PIL import Image
-import io
 import logging
-import queue
-import threading
 import time
-import atexit
-import uuid
-from utils.camera_util import get_wifi_ip, scan_camera, Camera
-from utils.display import display_dict_to_ui
-import pandas as pd
 from dotenv import load_dotenv
 import os
+import uuid
 from nodes.mqtt_client import MyMQTTClient
 from nodes.ubidots_client import ubidots
 
@@ -32,25 +21,6 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # ***************** Constanta *******
-RESOLUTION_DICT = {
-    "96x96": 0,
-    "QQVGA(160x120)": 1,
-    "128x128": 2,
-    "QCIF(176x144)": 3,
-    "HQVGA(240x176)": 4,
-    "240x240": 5,
-    "QVGA(320x240)": 6,
-    "CIF(400x296)": 7,
-    "HVGA(480x320)": 8,
-    "VGA(640x480)": 9,
-    "SVGA(800x600)": 10,
-    "XGA(1024x768)": 11,
-    "HD(1280x720)": 12,
-    "SXGA(1280x1024)": 13,
-    "UXGA(1600x1200)": 14,
-}
-
-REVERSED_RESOLUTION_DICT = {v: k for k, v in RESOLUTION_DICT.items()}
 BROKER = os.getenv("BROKER")
 PORT = os.getenv("BROKER_PORT")
 USERNAME = os.getenv("BROKER_USERNAME")
@@ -74,152 +44,6 @@ def cleanup_mqtt_client():
 atexit.register(cleanup_mqtt_client)
 
 # ***************** Util Function *******
-def start_camera():
-    st.session_state.start_camera = True
-    st.session_state.stop_camera = False
-    st.session_state.frame_counter = 0
-    if "last_frame" in st.session_state:
-        del st.session_state.last_frame
-
-def stop_camera():
-    st.session_state.start_camera = False
-    st.session_state.stop_camera = True
-    if "frame_queue" in st.session_state:
-        st.session_state.frame_queue.queue.clear()
-    if "last_frame" in st.session_state:
-        del st.session_state.last_frame
-
-async def st_scan_camera(ip):
-    st.session_state.scan_camera = True
-    st.session_state.camera_list = scan_camera(ip)
-    st.session_state.scan_camera = False
-
-def st_cek_camera_config():
-    camera_ip = st.session_state.camera_ip
-    if not camera_ip:
-        st.warning("Masukkan alamat IP kamera.")
-        return
-    camera = Camera(camera_ip)
-    camera_config = camera.cek_camera_configuration()
-    if camera_config:
-        st.session_state.camera_configuration = camera_config
-    else:
-        st.error("Gagal mengambil konfigurasi kamera. Pastikan alamat IP benar dan kamera terhubung.")
-
-def set_camera_resolution():
-    camera_ip = st.session_state.camera_ip
-    if not camera_ip:
-        st.warning("Masukkan alamat IP kamera.")
-        return
-    camera = Camera(camera_ip)
-    resolution = st.session_state.resolution
-    resolution_int = RESOLUTION_DICT.get(resolution, 12)
-    if camera.set_camera_resolution(resolution_int):
-        st.success(f"Resolusi kamera diatur ke {resolution}.")
-    else:
-        st.error("Gagal mengatur resolusi kamera. Pastikan alamat IP benar dan kamera terhubung.")
-
-def set_camera_xclk():
-    camera_ip = st.session_state.camera_ip
-    if not camera_ip:
-        st.warning("Masukkan alamat IP kamera.")
-        return
-    camera = Camera(camera_ip)
-    xclk = st.session_state.xclk
-    if camera.set_camera_xclk(xclk):
-        st.success(f"XCLK diatur ke {xclk}.")
-    else:
-        st.error("Gagal mengatur XCLK. Pastikan alamat IP benar dan kamera terhubung.")
-
-async def receive_frame(websocket_uri, frame_queue):
-    reconnect_delay = 1
-    max_reconnect_delay = 30
-    while not st.session_state.get("stop_camera", False):
-        try:
-            async with websockets.connect(websocket_uri, ping_interval=10, ping_timeout=20) as websocket:
-                logger.info("Connected to WebSocket")
-                reconnect_delay = 1
-                while not st.session_state.get("stop_camera", False):
-                    try:
-                        data = await asyncio.wait_for(websocket.recv(), timeout=10)
-                        if not data:
-                            logger.warning("Received empty data")
-                            continue
-                        try:
-                            img_bytes = base64.b64decode(data)
-                            if len(img_bytes) < 100:
-                                logger.warning("Received data too small to be an image")
-                                continue
-                            try:
-                                image = Image.open(io.BytesIO(img_bytes))
-                                image.verify()
-                                image = Image.open(io.BytesIO(img_bytes))
-                                while not frame_queue.empty():
-                                    try:
-                                        frame_queue.get_nowait()
-                                        frame_queue.task_done()
-                                    except queue.Empty:
-                                        break
-                                frame_queue.put_nowait((image, None))
-                                logger.debug("Frame queued")
-                            except Exception as e:
-                                logger.error(f"Invalid image data: {e}")
-                                frame_queue.put_nowait((None, f"Invalid image data: {e}"))
-                                continue
-                        except base64.binascii.Error as e:
-                            logger.error(f"Base64 decode error: {e}")
-                            frame_queue.put_nowait((None, f"Base64 decode error: {e}"))
-                            continue
-                    except asyncio.TimeoutError:
-                        logger.warning("WebSocket receive timeout")
-                        continue
-                    except websockets.exceptions.ConnectionClosed as e:
-                        logger.error(f"WebSocket connection closed: {e}")
-                        break
-                    except Exception as e:
-                        logger.error(f"Error processing frame: {e}")
-                        frame_queue.put_nowait((None, f"Error processing frame: {e}"))
-                        continue
-        except Exception as e:
-            logger.error(f"WebSocket connection failed: {e}")
-            if st.session_state.get("stop_camera", False):
-                break
-            await asyncio.sleep(reconnect_delay)
-            reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
-            logger.info(f"Attempting to reconnect in {reconnect_delay} seconds...")
-
-def run_websocket_loop(websocket_uri, frame_queue):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(receive_frame(websocket_uri, frame_queue))
-    except Exception as e:
-        logger.error(f"Websocket loop error: {e}")
-    finally:
-        loop.close()
-
-def update_ui(placeholder, frame_queue):
-    try:
-        if not frame_queue.empty():
-            image, error = frame_queue.get_nowait()
-            if error:
-                placeholder.error(error)
-            elif image:
-                st.session_state.last_frame = image
-                placeholder.image(image, channels="RGB", caption="Live Feed")
-                st.session_state.frame_counter += 1
-            frame_queue.task_done()
-        elif "last_frame" in st.session_state:
-            placeholder.image(st.session_state.last_frame, channels="RGB", caption="Live Feed")
-        else:
-            placeholder.write("No frames received yet...")
-    except queue.Empty:
-        if "last_frame" in st.session_state:
-            placeholder.image(st.session_state.last_frame, channels="RGB", caption="Live Feed")
-        else:
-            placeholder.write("No frames received yet...")
-
-# Fungsi Speaker Config
 def display_notification(placeholder, notification_key):
     if notification_key in st.session_state:
         message, msg_type, timestamp = st.session_state[notification_key]
@@ -318,23 +142,8 @@ def play_sound_file():
 # Inisialisasi session_state
 if "sidebar_value" not in st.session_state:
     st.session_state.sidebar_value = "Dashboard"
-if "camera_list" not in st.session_state:
-    st.session_state.camera_list = []
-if "scan_camera" not in st.session_state:
-    st.session_state.scan_camera = False
-if "start_camera" not in st.session_state:
-    st.session_state.start_camera = False
-if "stop_camera" not in st.session_state:
-    st.session_state.stop_camera = False
-if "frame_queue" not in st.session_state:
-    st.session_state.frame_queue = queue.Queue(maxsize=10)
-if "frame_counter" not in st.session_state:
-    st.session_state.frame_counter = 0
 
 # **************** Variable ***************
-wifi_ip = get_wifi_ip()
-websocket_uri = "ws://localhost:8765"
-
 if "ubidots_client" not in st.session_state:
     st.session_state.ubidots_client = ubidots(
         token=TOKEN,
@@ -349,7 +158,6 @@ if "mqtt_client" not in st.session_state or st.session_state.mqtt_client is None
             logger.error("Missing MQTT credentials")
             st.error("Konfigurasi MQTT tidak lengkap. Periksa file .env.")
             raise ValueError("Incomplete MQTT configuration")
-        # Tambahkan Client ID unik ke logger untuk tracking
         client_id = f"dashboard-{uuid.uuid4()}"
         logger.info("Initializing MQTT client with Client ID: %s", client_id)
         st.session_state.mqtt_client = MyMQTTClient(BROKER, int(PORT), USERNAME, PASSWORD)
@@ -392,30 +200,11 @@ elif selected == "Live Cam":
     st.subheader("📺 Live Cam")
     col1, col2 = st.columns(2)
     with col1:
-        st.button("Start Camera", key="start_camera_button", on_click=start_camera)
+        st.button("Start Camera", key="start_camera_button")
     with col2:
-        st.button("Stop Camera", key="stop_camera_button", on_click=stop_camera)
+        st.button("Stop Camera", key="stop_camera_button")
     placeholder = st.empty()
-
-    if st.session_state.start_camera and not st.session_state.get("stop_camera", False):
-        if "websocket_thread" not in st.session_state or not st.session_state.websocket_thread.is_alive():
-            st.session_state.frame_queue = queue.Queue(maxsize=10)
-            st.session_state.websocket_thread = threading.Thread(
-                target=run_websocket_loop,
-                args=(websocket_uri, st.session_state.frame_queue),
-                daemon=True
-            )
-            st.session_state.websocket_thread.start()
-            logger.info("WebSocket thread started")
-        
-        update_ui(placeholder, st.session_state.frame_queue)
-        
-        if not st.session_state.get("stop_camera", False):
-            time.sleep(0.2)
-            st.rerun()
-
-    else:
-        placeholder.write("Camera feed stopped.")
+    placeholder.write("Camera feed stopped.")
 
 elif selected == "Speaker Config":
     st.subheader("🔊 Speaker Configuration")
@@ -453,29 +242,22 @@ elif selected == "Speaker Config":
     st.button("Play Sound File", key="play_sound_file_button", on_click=play_sound_file)
 
 elif selected == "Camera Config":
-    if "camera_configuration" not in st.session_state:
-        st.session_state.camera_configuration = {}
     st.subheader("⚙️ Camera Configuration")
-    if st.button("Scan Camera", key="scan_camera_button"):
-        with st.spinner("Scanning for cameras..."):
-            asyncio.run(st_scan_camera(wifi_ip))
-    if st.session_state.camera_list:
-        st.write("Cameras found:")
-        camera_df = pd.DataFrame(st.session_state.camera_list)
-        st.dataframe(camera_df, use_container_width=True)
+    st.button("Scan Camera", key="scan_camera_button")
     st.text_input("Enter Camera IP Address", value="", key="camera_ip")
     tab1, tab2 = st.tabs(["Camera Config", "Camera Status"])
     with tab1:
         cols = st.columns(2)
         with cols[0]:
             st.number_input("Xclk", value=20, key="xclk", min_value=20, max_value=40, step=1)
-        st.button("Set", key="set_camera_xclk_button", on_click=set_camera_xclk, disabled=not bool(st.session_state.camera_ip))
+        st.button("Set", key="set_camera_xclk_button", disabled=True)
         cols = st.columns(2)
         with cols[0]:
-            st.selectbox("Resolution", options=list(RESOLUTION_DICT.keys()), index=12, key="resolution")
-        st.button("Set", key="set_camera_resolution_button", on_click=set_camera_resolution, disabled=not bool(st.session_state.camera_ip))
+            st.selectbox("Resolution", options=["96x96", "QQVGA(160x120)", "128x128", "QCIF(176x144)", 
+                                              "HQVGA(240x176)", "240x240", "QVGA(320x240)", "CIF(400x296)", 
+                                              "HVGA(480x320)", "VGA(640x480)", "SVGA(800x600)", "XGA(1024x768)", 
+                                              "HD(1280x720)", "SXGA(1280x1024)", "UXGA(1600x1200)"], 
+                         index=12, key="resolution")
+        st.button("Set", key="set_camera_resolution_button", disabled=True)
     with tab2:
-        st.button("Cek Config", key="check_config_button", on_click=st_cek_camera_config, disabled=not bool(st.session_state.camera_ip))
-        if st.session_state.camera_configuration:
-            st.success("Kamera terhubung dan konfigurasi berhasil diambil.")
-            display_dict_to_ui(st.session_state.camera_configuration, title="Camera Configuration", expandable=True)
+        st.button("Cek Config", key="check_config_button", disabled=True)
