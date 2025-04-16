@@ -40,8 +40,6 @@ def cleanup_mqtt_client():
         finally:
             st.session_state.mqtt_client = None
 
-# Daftarkan pembersihan saat aplikasi dihentikan
-atexit.register(cleanup_mqtt_client)
 
 # ***************** Util Function *******
 def display_notification(placeholder, notification_key):
