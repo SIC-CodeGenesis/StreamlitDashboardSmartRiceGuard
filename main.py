@@ -21,12 +21,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # ***************** Constanta *******
-BROKER = os.environ.get("BROKER")
-PORT =  os.environ.get("BROKER_PORT")
-USERNAME =  os.environ.get("BROKER_USERNAME")
-PASSWORD =  os.environ.get("BROKER_PASSWORD")
-DEVICE_ID =  os.environ.get("UBIDOTS_DEVICE_ID")
-TOKEN =  os.environ.get("UBIDOTS_TOKEN")
+BROKER = st.secrets.get("BROKER")
+PORT =  st.secrets.get("BROKER_PORT")
+USERNAME =  st.secrets.get("BROKER_USERNAME")
+PASSWORD =  st.secrets.get("BROKER_PASSWORD")
+DEVICE_ID =  st.secrets.get("UBIDOTS_DEVICE_ID")
+TOKEN =  st.secrets.get("UBIDOTS_TOKEN")
 
 # Fungsi untuk membersihkan koneksi MQTT
 def cleanup_mqtt_client():
