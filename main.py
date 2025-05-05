@@ -1,11 +1,13 @@
 import streamlit as st
 import logging
 import time
-from dotenv import load_dotenv
-import os
 import uuid
 from nodes.mqtt_client import MyMQTTClient
 from nodes.ubidots_client import ubidots
+from nodes.LLM_nodes import RicePlantAnalyzer
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 # Setup logging
 logging.basicConfig(
@@ -17,8 +19,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 # ***************** Constanta *******
 BROKER = st.secrets.get("BROKER")
@@ -192,7 +192,21 @@ selected = st.session_state.sidebar_value
 
 if selected == "Dashboard":
     st.subheader("📊 Dashboard")
-    st.write("Konten untuk dashboard di sini...")
+
+    st.write("### Deteksi Burung per Jam (Dummy Data)")
+    hours = pd.date_range(end=pd.Timestamp.now(), periods=24, freq='H')
+    bird_detected = np.random.choice([0, 1], size=24, p=[0.7, 0.3])  # 0: tidak ada, 1: ada burung
+    df_bird = pd.DataFrame({"Jam": hours, "Burung Terdeteksi": bird_detected})
+    st.line_chart(df_bird.set_index("Jam"))
+
+    st.write("### Distribusi Penyakit Tanaman Padi (Dummy Data)")
+    diseases = ["Blast", "Bacterial Leaf Blight", "Tungro", "Sheath Blight", "Healthy"]
+    counts = np.random.randint(10, 100, size=len(diseases))
+    fig, ax = plt.subplots()
+    ax.bar(diseases, counts, color=["red", "orange", "yellow", "green", "blue"])
+    ax.set_ylabel("Jumlah Kasus")
+    ax.set_title("Distribusi Penyakit Tanaman Padi")
+    st.pyplot(fig)
 
 elif selected == "Live Cam":
     st.subheader("📺 Live Cam")
@@ -203,6 +217,51 @@ elif selected == "Live Cam":
         st.button("Stop Camera", key="stop_camera_button")
     placeholder = st.empty()
     placeholder.write("Camera feed stopped.")
+
+elif selected == "Live Condition":
+    st.subheader("🌾 Live Condition")
+    camera_ip = st.text_input("Enter Camera IP Address", value="", key="live_condition_camera_ip")
+    
+    if st.button("Capture and Analyze", key="capture_analyze_button"):
+        if not camera_ip:
+            st.warning("Masukkan alamat IP kamera.")
+        else:
+            st.write("Camera can't run on server, please run on local machine.")
+
+        if "captured_frame" in st.session_state and st.session_state.captured_frame:
+            col1, col2 = st.columns([1, 2])
+            st.image(st.session_state.captured_frame, channels="RGB", caption="Captured Frame")
+            st.write("### Analysis")
+            # Create a placeholder for streaming analysis
+            analysis_container = st.empty()
+            try:
+                analyzer = RicePlantAnalyzer()
+                # Override _fetch_image to use the captured frame
+                def custom_fetch_image(self, camera_ip: str):
+                    if st.session_state.captured_frame:
+                        image = np.array(st.session_state.captured_frame)
+                        if len(image.shape) == 2:
+                            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+                        return image
+                    raise RuntimeError("No captured frame available.")
+                
+                # Bind custom fetch method to analyzer instance
+                import types
+                analyzer._fetch_image = types.MethodType(custom_fetch_image, analyzer)
+                
+                # Stream analysis output with a spinner
+                with st.spinner("Analyzing rice plant condition..."):
+                    full_text = ""  # Accumulate streamed chunks
+                    for chunk in analyzer.infer_plant_condition(camera_ip=camera_ip):
+                        full_text += chunk
+                        # Update the container with the accumulated text
+                        analysis_container.markdown(full_text, unsafe_allow_html=True)
+                        logger.debug("Streamed analysis chunk.")
+            except Exception as e:
+                analysis_container.error(f"Error during analysis: {str(e)}")
+                logger.error(f"Analysis failed: {str(e)}")
+    else:
+        st.info("Klik 'Capture and Analyze' untuk mengambil gambar dan menganalisis kondisi tanaman.")
 
 elif selected == "Speaker Config":
     st.subheader("🔊 Speaker Configuration")
