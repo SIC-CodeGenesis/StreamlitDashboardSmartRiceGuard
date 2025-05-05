@@ -182,6 +182,7 @@ with st.sidebar:
         st.markdown("# 🚀 Menu 🚀")
     sidebar_button("Dashboard")
     sidebar_button("Live Cam")
+    sidebar_button("Live Condition")
     sidebar_button("Speaker Config")
     sidebar_button("Camera Config")
 
