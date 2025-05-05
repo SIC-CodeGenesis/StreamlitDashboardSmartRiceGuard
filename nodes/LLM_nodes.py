@@ -1,4 +1,3 @@
-import cv2
 import numpy as np
 import requests
 from io import BytesIO
@@ -66,8 +65,7 @@ class RicePlantAnalyzer:
         try:
             image = self._fetch_image(camera_ip)
             processed_image = self._preprocess_image(image)
-            _, buffer = cv2.imencode('.jpg', (image * 255).astype(np.uint8))
-            image_base64 = base64.b64encode(buffer).decode('utf-8')
+            image_base64 = ""
             messages = [
                 {
                     "role": "user",
