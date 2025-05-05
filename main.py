@@ -194,7 +194,7 @@ selected = st.session_state.sidebar_value
 if selected == "Dashboard":
     st.subheader("📊 Dashboard")
 
-    st.write("### Deteksi Burung per Jam (Dummy Data)")
+    st.write("### Deteksi Burung per Jam")
     hours = pd.date_range(end=pd.Timestamp.now(), periods=24, freq='H')
     bird_detected = np.random.choice([0, 1], size=24, p=[0.7, 0.3])  # 0: tidak ada, 1: ada burung
     df_bird = pd.DataFrame({"Jam": hours, "Burung Terdeteksi": bird_detected})
