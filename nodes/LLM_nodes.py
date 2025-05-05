@@ -9,6 +9,7 @@ import uuid
 import os
 import base64
 from openai import OpenAI
+from streamlit import secrets
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,7 +20,7 @@ class RicePlantAnalyzer:
     def __init__(self, max_retries: int = 3, timeout: int = 10):
         self.max_retries = max_retries
         self.timeout = timeout
-        self.api_key = os.getenv("XAI_API_KEY")
+        self.api_key = secrets.get("XAI_API_KEY")
         if not self.api_key:
             raise ValueError("XAI_API_KEY environment variable not set.")
         self.client = OpenAI(
